@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { exec } from 'child_process';
 import type { ICommand, IConfig } from './model';
+import AnsiToHtml from 'ansi-to-html';
 
 export function activate(context: vscode.ExtensionContext): void {
   const extension = new RunOnSaveExtension(context);
@@ -15,19 +16,13 @@ export function activate(context: vscode.ExtensionContext): void {
     disposeStatus.dispose();
   });
 
-  vscode.commands.registerCommand(
-    'extension.emeraldwalk.enableRunOnSave',
-    () => {
-      extension.isEnabled = true;
-    },
-  );
+  vscode.commands.registerCommand('extension.devark28.enableRunOnSave', () => {
+    extension.isEnabled = true;
+  });
 
-  vscode.commands.registerCommand(
-    'extension.emeraldwalk.disableRunOnSave',
-    () => {
-      extension.isEnabled = false;
-    },
-  );
+  vscode.commands.registerCommand('extension.devark28.disableRunOnSave', () => {
+    extension.isEnabled = false;
+  });
 
   vscode.workspace.onDidSaveTextDocument((document: vscode.TextDocument) => {
     extension.runCommands(document);
@@ -38,11 +33,21 @@ class RunOnSaveExtension {
   private _outputChannel: vscode.OutputChannel;
   private _context: vscode.ExtensionContext;
   private _config: IConfig;
+  private _terminal: vscode.Terminal;
+  private _ansiConverter: AnsiToHtml;
 
   constructor(context: vscode.ExtensionContext) {
     this._context = context;
     this._outputChannel = vscode.window.createOutputChannel('Run On Save');
     this.loadConfig();
+    this._terminal = vscode.window.createTerminal('Run On Save');
+    this._ansiConverter = new AnsiToHtml();
+  }
+
+  private _handleOutput(data: string): void {
+    const htmlOutput = this._ansiConverter.toHtml(data);
+    this._outputChannel.appendLine(htmlOutput);
+    this._terminal.sendText(data, false);
   }
 
   /** Recursive call to run commands. */
@@ -113,13 +118,15 @@ class RunOnSaveExtension {
     return new Promise((resolve) => {
       const startMs = performance.now();
 
-      const child = exec(cfg.cmd, this._getExecOption(document));
-      child.stdout.on('data', (data) => this._outputChannel.append(data));
-      child.stderr.on('data', (data) => this._outputChannel.append(data));
+      const child = exec(cfg.cmd, {
+        ...this._getExecOption(document),
+        env: { ...process.env, FORCE_COLOR: '1' },
+      });
+
+      child.stdout.on('data', (data) => this._handleOutput(data.toString()));
+      child.stderr.on('data', (data) => this._handleOutput(data.toString()));
       child.on('error', (e) => {
-        this.showOutputMessage(e.message);
-        // Don't reject since we want to be able to chain and handle
-        // message properties even if this errors
+        this._handleOutput(e.message);
         resolve(performance.now() - startMs);
       });
       child.on('exit', (_e) => {
@@ -170,7 +177,7 @@ class RunOnSaveExtension {
 
   public loadConfig(): void {
     this._config = <IConfig>(
-      (<any>vscode.workspace.getConfiguration('emeraldwalk.runonsave'))
+      (<any>vscode.workspace.getConfiguration('devark28.runonsave'))
     );
   }
 
@@ -206,6 +213,7 @@ class RunOnSaveExtension {
   public runCommands(document: vscode.TextDocument): void {
     if (this.autoClearConsole) {
       this._outputChannel.clear();
+      this._terminal.sendText('clear', true);
     }
 
     if (!this.isEnabled || this.commands.length === 0) {
